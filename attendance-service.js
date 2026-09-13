@@ -62,7 +62,7 @@ function securityHeaders(req) {
         'X-Content-Type-Options': 'nosniff',
         'X-Frame-Options': 'DENY',
         'Referrer-Policy': 'no-referrer',
-        'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=()',
+        'Permissions-Policy': 'camera=self, microphone=(), geolocation=(), payment=()',
     };
     if ((req && (req.headers['x-forwarded-proto'] === 'https' || req.socket && req.socket.encrypted)) || process.env.HTTPS_ENABLED === 'true') {
         h['Strict-Transport-Security'] = 'max-age=31536000; includeSubDomains';
