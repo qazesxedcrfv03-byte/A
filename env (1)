@@ -47,6 +47,6 @@ ATTENDANCE_ALLOWED_ORIGINS=*
 ATTENDANCE_ADMIN_TOKEN=6jN5uTom1VY3IQxM4nve72lOEUra0qzk
 
 # Supabase (required — replace with real project credentials)
-SUPABASE_URL=
-SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_URL=https://esnualorflkjcamlbcxy.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVzbnVhbG9yZmxramNhbWxiY3h5Iiwicm9sZSI6InNlcnZpY2Vfcm9sZSIsImlhdCI6MTc4OTIwMjUyNywiZXhwIjoyMTA0Nzc4NTI3fQ.7rDGpBoAiqdAbuQNsA6OIvObzz2YivAauJzxQFX00ik
 EVIDENCE_BUCKET=evidence-photos
