@@ -1,0 +1,21 @@
+{
+  "name": "can-attendance",
+  "version": "1.0.0",
+  "description": "น้องแคนเช็กชื่อ — AI Attendance System (browser SPA + Node.js backend services)",
+  "private": true,
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "scripts": {
+    "start": "node start.js",
+    "dev": "node start.js",
+    "lint": "node lint.js",
+    "build": "node build.js",
+    "test": "node test-class-model.js && node test-storage.js && node test-attendance.js && node test-step4.js && node test-stats.js && node test-class-api.js && node test-scan-history.js && node test-system-health.js && node test-academic-week.js && node test-roster.js"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.45.0"
+  },
+  "devDependencies": {}
+}

@@ -1,0 +1,36 @@
+# Caddyfile.tunnel — Internal reverse proxy for use BEHIND a tunnel
+# (Cloudflare Tunnel / ngrok). No domain, no email, no ACME/Let's Encrypt here —
+# the tunnel provider terminates HTTPS at its own edge and forwards plain HTTP
+# to Caddy on port 80 inside the Docker network. Caddy's only job here is to
+# combine the 3 internal services (static frontend + 2 API services) into a
+# single origin, exactly like Caddyfile does — just without TLS of its own.
+#
+# Used together with docker-compose.tunnel.yml:
+#   docker compose -f docker-compose.yml -f docker-compose.tunnel.yml up -d --build
+
+:80 {
+    # --- Security headers (applied to all responses) ---
+    header {
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+    }
+
+    # --- Health check -> attendance service ---
+    @health path /health
+    reverse_proxy @health app:3031
+
+    # --- Evidence storage service (port 3030) ---
+    @evidence path /api/evidence*
+    reverse_proxy @evidence app:3030
+
+    # --- Attendance API service (port 3031) ---
+    @attendance path /api/attendance* /api/audit* /api/stats* /api/scans* /api/classes* /api/students*
+    reverse_proxy @attendance app:3031
+
+    # --- Static frontend (SPA) ---
+    handle_path {
+        reverse_proxy app:8080
+    }
+}

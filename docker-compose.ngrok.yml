@@ -1,0 +1,85 @@
+name: can-attendance
+
+# docker-compose.ngrok.yml — Free HTTPS with a PERMANENT URL (no domain purchase).
+#
+# ngrok's free plan includes ONE static domain per account (e.g.
+# your-name.ngrok-free.app) that never changes, unlike the Cloudflare quick
+# tunnel in docker-compose.tunnel.yml. Setup requires a free ngrok account
+# (no credit card):
+#
+#   1. Sign up free:            https://dashboard.ngrok.com/signup
+#   2. Get your authtoken:      https://dashboard.ngrok.com/get-started/your-authtoken
+#   3. Claim your free static domain: https://dashboard.ngrok.com/domains
+#      (gives you something like "attend-can.ngrok-free.app")
+#   4. Put both values in .env:
+#        NGROK_AUTHTOKEN=xxxxxxxxxxxxxxxxxxxxxxxxxxxx
+#        NGROK_DOMAIN=attend-can.ngrok-free.app
+#
+# Usage (use THIS file INSTEAD of docker-compose.yml, not together with it):
+#   docker compose -f docker-compose.ngrok.yml up -d --build
+#
+# Your app is now permanently reachable at https://<NGROK_DOMAIN>, no matter
+# how many times the containers restart.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: can-attendance-caddy
+    volumes:
+      - ./Caddyfile.tunnel:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  app:
+    build: .
+    container_name: can-attendance-app
+    expose:
+      - "8080"
+      - "3030"
+      - "3031"
+    env_file:
+      - .env
+    environment:
+      STATIC_PORT: "8080"
+      EVIDENCE_PORT: "3030"
+      ATTENDANCE_PORT: "3031"
+      NODE_ENV: production
+      TZ: ${TZ:-Asia/Bangkok}
+      REVERSE_PROXY: "true"
+      HTTPS_ENABLED: "false"
+    volumes:
+      - app-data:/app/server/data
+      - app-evidence:/app/server/storage/evidence
+    healthcheck:
+      test: ["CMD", "node", "server/healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  ngrok:
+    image: ngrok/ngrok:latest
+    container_name: can-attendance-ngrok
+    environment:
+      NGROK_AUTHTOKEN: ${NGROK_AUTHTOKEN}
+    command:
+      - "http"
+      - "--domain=${NGROK_DOMAIN}"
+      - "caddy:80"
+    depends_on:
+      - caddy
+    restart: unless-stopped
+
+volumes:
+  app-data:
+    driver: local
+  app-evidence:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local

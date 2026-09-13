@@ -1,0 +1,82 @@
+name: can-attendance
+
+# docker-compose.tunnel.yml — Free HTTPS with NO domain and NO router/port-forwarding.
+#
+# Cloudflare's `cloudflared` makes an OUTBOUND-only connection to Cloudflare's
+# network and hands you a public https://xxxxx.trycloudflare.com URL that
+# terminates HTTPS for you. You never open any port on your router/firewall.
+# Caddy still combines the 3 internal services into one origin — cloudflared
+# just points at Caddy (over Docker's internal network) instead of the
+# internet pointing at Caddy directly, so no domain/ACME/Let's-Encrypt is
+# needed on the Caddy side either.
+#
+# Usage (use THIS file INSTEAD of docker-compose.yml, not together with it):
+#   docker compose -f docker-compose.tunnel.yml up -d --build
+#   docker compose -f docker-compose.tunnel.yml logs -f cloudflared
+#     -> the https://xxxxx.trycloudflare.com URL appears in that log output
+#
+# NOTE: this "quick tunnel" URL changes every time the cloudflared container
+# restarts (docker compose down/up, host reboot, etc.). That's fine for
+# testing/demo. For a URL that never changes, ask for the free ngrok static-
+# domain setup instead — same idea, but the URL is permanent.
+
+services:
+  caddy:
+    image: caddy:2-alpine
+    container_name: can-attendance-caddy
+    volumes:
+      - ./Caddyfile.tunnel:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - app
+    restart: unless-stopped
+    # No ports published to the host — cloudflared reaches Caddy over the
+    # internal Docker network only. Nothing here is reachable from the
+    # internet except through the tunnel.
+
+  app:
+    build: .
+    container_name: can-attendance-app
+    expose:
+      - "8080"
+      - "3030"
+      - "3031"
+    env_file:
+      - .env
+    environment:
+      STATIC_PORT: "8080"
+      EVIDENCE_PORT: "3030"
+      ATTENDANCE_PORT: "3031"
+      NODE_ENV: production
+      TZ: ${TZ:-Asia/Bangkok}
+      REVERSE_PROXY: "true"
+      HTTPS_ENABLED: "false"
+    volumes:
+      - app-data:/app/server/data
+      - app-evidence:/app/server/storage/evidence
+    healthcheck:
+      test: ["CMD", "node", "server/healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: can-attendance-cloudflared
+    command: tunnel --no-autoupdate --url http://caddy:80
+    depends_on:
+      - caddy
+    restart: unless-stopped
+
+volumes:
+  app-data:
+    driver: local
+  app-evidence:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local

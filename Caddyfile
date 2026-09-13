@@ -1,0 +1,68 @@
+# Caddyfile — HTTPS reverse proxy for can-attendance PWA
+#
+# Terminates TLS (automatic via Caddy's ACME integration) and routes:
+#   /api/evidence*  -> evidence storage service (port 3030)
+#   /api/*          -> attendance API service   (port 3031)
+#   /health         -> attendance API health    (port 3031)
+#   /               -> static frontend          (port 8080)
+#
+# Set the domain via the CADDY_DOMAIN env var (default: localhost).
+# In docker-compose, only this container exposes ports 80 and 443 to the host;
+# ports 8080/3030/3031 are internal to the app container.
+
+{
+    # Caddy will auto-provision certificates via Let's Encrypt (ACME HTTP-01).
+    # Use a staging CA for initial testing, then remove to go live:
+    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+    email {$CADDY_EMAIL}
+    # Optional: uncomment to use an internal CA
+    # acme_ca https://acme-staging-v02.api.letsencrypt.org/directory
+}
+
+{$CADDY_DOMAIN} {
+    # --- TLS ---
+    # `tls` with an email enables automatic HTTPS via Let's Encrypt.
+    # For localhost (dev), Caddy generates a local self-signed cert automatically.
+    tls {
+        protocols TLS1.2 TLS1.3
+    }
+
+    # --- Security headers (applied to all responses) ---
+    header {
+        # HSTS — force HTTPS for 1 year (incl. subdomains, preload-ready)
+        Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+        X-Content-Type-Options "nosniff"
+        X-Frame-Options "DENY"
+        Referrer-Policy "no-referrer"
+        Permissions-Policy "camera=(), microphone=(), geolocation=(), payment=()"
+    }
+
+    # --- Health check -> attendance service ---
+    @health path /health
+    reverse_proxy @health app:3031
+
+    # --- Evidence storage service (port 3030) ---
+    # POST /api/evidence      -> upload evidence
+    # GET  /api/evidence/:id  -> retrieve evidence image
+    # GET  /api/evidence/health -> health check
+    @evidence path /api/evidence*
+    reverse_proxy @evidence app:3030
+
+    # --- Attendance API service (port 3031) ---
+    # GET  /api/attendance           -> list attendance
+    # POST /api/attendance/correction -> admin correction
+    # GET  /api/audit                -> audit trail
+    # GET  /api/stats                -> aggregated statistics
+    # GET  /api/scans                -> scan history list
+    # POST /api/scans/log            -> log a scan event
+    # API/classes*                   -> class management
+    @attendance path /api/attendance* /api/audit* /api/stats* /api/scans* /api/classes* /api/students*
+    reverse_proxy @attendance app:3031
+
+    # --- Static frontend (SPA) ---
+    # Serves index.html, JS, CSS, PWA icons, manifest, etc.
+    # SPA fallback: any non-API path falls through to the static server.
+    handle_path {
+        reverse_proxy app:8080
+    }
+}

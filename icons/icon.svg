@@ -1,0 +1,60 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  น้องแคนเช็กชื่อ — AI Attendance System
+  PWA application icon. Uses the EXISTING brand identity only:
+  - mascot: Nong Kan the baby elephant (🐘) — see index.html:77
+  - brand colors: bio-gradient #22C55E -> #2DD4BF on dark field #0A0E14 (style.css:21,6,21-26)
+  - wordmark: "น้องแคน" in Kanit/Noto Sans Thai (style.css:69, index.html:21)
+  - signature reticle brackets: style.css:100 (reticle token = #2DD4BF)
+  No new or unrelated branding introduced.
+-->
+<svg xmlns="http://www.w3.org/2000/svg"
+     viewBox="0 0 512 512"
+     role="img"
+     aria-labelledby="t1">
+  <title id="t1">น้องแคนเช็กชื่อ — AI Attendance System</title>
+  <desc>น้องแคน — ระบบเช็กชื่ออัจฉริยะด้วยใบหน้า</desc>
+
+  <defs>
+    <linearGradient id="bio" x1="0%" y1="0%" x2="0%" y2="100%">
+      <stop offset="0%"  stop-color="#22C55E"/>
+      <stop offset="100%" stop-color="#2DD4BF"/>
+    </linearGradient>
+  </defs>
+
+  <!-- dark sensor-field background; color matches style.css background token -->
+  <rect x="0" y="0" width="512" height="512" rx="96" fill="#0A0E14"/>
+
+  <!-- signature reticle brackets; color matches style.css reticle token -->
+  <g stroke="#2DD4BF" stroke-width="6" stroke-linecap="round" stroke-linejoin="round">
+    <line x1="34" y1="34" x2="96"  y2="34"/>
+    <line x1="34" y1="34" x2="34"  y2="96"/>
+    <line x1="416" y1="34" x2="478" y2="34"/>
+    <line x1="478" y1="34" x2="478" y2="96"/>
+    <line x1="34" y1="416" x2="96"  y2="416"/>
+    <line x1="34" y1="416" x2="34"  y2="478"/>
+    <line x1="416" y1="478" x2="478" y2="478"/>
+    <line x1="478" y1="478" x2="478" y2="416"/>
+  </g>
+
+  <!-- baby elephant ears (perched above the head; gradient = bio signal) -->
+  <ellipse cx="168" cy="194" rx="66" ry="91" fill="url(#bio)"/>
+  <ellipse cx="344" cy="194" rx="66" ry="91" fill="url(#bio)"/>
+
+  <!-- baby elephant head (white, sits beneath ears) -->
+  <ellipse cx="256" cy="300" rx="122" ry="125" fill="#FFFFFF" stroke="#2DD4BF" stroke-width="6"/>
+
+  <!-- eye -->
+  <circle cx="215" cy="266" r="13" fill="#0A0E14"/>
+
+  <!-- trunk -->
+  <ellipse cx="256" cy="379" rx="28" ry="56" fill="#2DD4BF"/>
+
+  <!-- wordmark; font matches style.css font-th and brand-name tokens -->
+  <text x="256" y="470"
+        text-anchor="middle"
+        font-family="'Kanit', 'Noto Sans Thai', sans-serif"
+        font-size="60"
+        font-weight="700"
+        fill="url(#bio)">น้องแคน</text>
+</svg>

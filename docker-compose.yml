@@ -1,0 +1,78 @@
+name: can-attendance
+
+services:
+  # ─────────────────────────────────────────────────────
+  # Caddy — HTTPS reverse proxy (STEP 12)
+  #
+  # Terminates TLS with automatic Let's Encrypt certificate
+  # provisioning (ACME HTTP-01). Routes /api/* and /health
+  # to the backend services and everything else to the
+  # static frontend SPA.
+  #
+  # Only ports 80 (ACME challenge) and 443 (HTTPS) are
+  # published to the host. The app container's service
+  # ports (8080/3030/3031) are NOT published.
+  # ─────────────────────────────────────────────────────
+  caddy:
+    image: caddy:2-alpine
+    container_name: can-attendance-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    environment:
+      - CADDY_DOMAIN=${CADDY_DOMAIN:-localhost}
+      - CADDY_EMAIL=${CADDY_EMAIL:-admin@example.com}
+    depends_on:
+      - app
+    restart: unless-stopped
+
+  # ─────────────────────────────────────────────────────
+  # Application — single container runs all three services:
+  #   static-frontend  (8080), evidence-storage  (3030),
+  #   attendance API  (3031).
+  #
+  # Behind Caddy: REVERSE_PROXY=true so the frontend injects
+  # relative API URLs (same-origin through the proxy for HTTPS).
+  # The internal ports are NOT published (caddy is the entry point).
+  # ─────────────────────────────────────────────────────
+  app:
+    build: .
+    container_name: can-attendance-app
+    expose:
+      - "8080"   # static frontend (internal only)
+      - "3030"   # evidence storage API (internal only)
+      - "3031"   # attendance API (internal only)
+    env_file:
+      - .env
+    environment:
+      STATIC_PORT: "8080"
+      EVIDENCE_PORT: "3030"
+      ATTENDANCE_PORT: "3031"
+      NODE_ENV: production
+      TZ: ${TZ:-Asia/Bangkok}
+      REVERSE_PROXY: "true"
+      HTTPS_ENABLED: "false"
+    volumes:
+      - app-data:/app/server/data
+      - app-evidence:/app/server/storage/evidence
+    healthcheck:
+      test: ["CMD", "node", "server/healthcheck.js"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+    restart: unless-stopped
+
+volumes:
+  app-data:
+    driver: local
+  app-evidence:
+    driver: local
+  caddy_data:
+    driver: local
+  caddy_config:
+    driver: local
