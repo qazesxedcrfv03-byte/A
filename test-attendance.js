@@ -138,9 +138,23 @@ const OTHER = '2025-07-07'; // a week with no roster entry for this student
     r = await post({ studentId: 'S1', date: A, previousStatus: 'absent', newStatus: 'present', reason: 'bad method', method: 'TELEPORT' });
     assert('invalid method -> 400', r.status === 400, `status=${r.status} body=${JSON.stringify(r.body)}`);
 
-    // 9. STEP 9: previousStatus (old status) validation
-    r = await post({ studentId: 'S1', date: A, newStatus: 'present', reason: 'no previousStatus' });
-    assert('missing previousStatus -> 400', r.status === 400, `status=${r.status} body=${JSON.stringify(r.body)}`);
+    // 8b. STEP 7: week validation respects education level
+    // ปวช. allows weeks 1-18; ปวส. allows weeks 1-15.
+    r = await post({ studentId: 'S120', date: A, previousStatus: 'absent', newStatus: 'present', reason: 'ปวช week ok', className: 'ปวช.1', week: 18, academicYear: '2025', semester: 1 });
+    assert('ปวช. week 18 -> 200', r.status === 200, `status=${r.status} body=${JSON.stringify(r.body)}`);
+    r = await post({ studentId: 'S120', date: A, newStatus: 'present', reason: 'ปวส week 16 rejected', className: 'ปวส.1', week: 16, academicYear: '2025', semester: 2 });
+    assert('ปวส. week 16 -> 400', r.status === 400, `status=${r.status} body=${JSON.stringify(r.body)}`);
+    r = await post({ studentId: 'S121', date: A, previousStatus: 'absent', newStatus: 'present', reason: 'ปวช week 19 rejected', className: 'ปวช.1', week: 19, academicYear: '2025', semester: 1 });
+    assert('ปวช. week 19 -> 400', r.status === 400, `status=${r.status} body=${JSON.stringify(r.body)}`);
+
+    // 9. STEP 1: previousStatus is now OPTIONAL.
+    // When omitted the server treats the request as a CREATE (no concurrency check)
+    // — the client is asserting "no record exists on my side". This replaces the old
+    // "fake previousStatus=absent" pattern that conflated NO-RECORD with EXPLICIT-ABSENT.
+    r = await post({ studentId: 'S99', date: OTHER, newStatus: 'present', reason: 'create without previousStatus' });
+    assert('missing previousStatus -> 200 (create)', r.status === 200, `status=${r.status} body=${JSON.stringify(r.body)}`);
+    assert('missing previousStatus action=created', r.body.action === 'created', `body=${JSON.stringify(r.body)}`);
+    // invalid previousStatus string (when provided) is still rejected
     r = await post({ studentId: 'S1', date: A, previousStatus: 'maybe', newStatus: 'present', reason: 'bad previousStatus' });
     assert('invalid previousStatus -> 400', r.status === 400, `status=${r.status} body=${JSON.stringify(r.body)}`);
 
@@ -149,6 +163,7 @@ const OTHER = '2025-07-07'; // a week with no roster entry for this student
     r = await post({ studentId: 'S1', date: A, previousStatus: 'present', newStatus: 'absent', reason: 'stale check' });
     assert('stale previousStatus -> 409 conflict', r.status === 409, `status=${r.status} body=${JSON.stringify(r.body)}`);
     assert('409 returns current previousStatus', r.body.previousStatus === 'late', `body=${JSON.stringify(r.body)}`);
+    assert('409 returns hasRecord=true for existing record', r.body.hasRecord === true, `body=${JSON.stringify(r.body)}`);
     // Verify record was NOT modified
     const afterConflict = await get('date=' + A + '&studentId=S1');
     assert('S1 record unchanged after 409', afterConflict.body.attendance.length === 1, JSON.stringify(afterConflict.body));

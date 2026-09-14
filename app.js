@@ -876,12 +876,19 @@ function saveHistStudentDay(btn) {
     if (!statusSelect || !reasonInput) return;
     const newStatus = statusSelect.value;
     const reason = reasonInput.value.trim();
-    const { status: currentStatus } = getStudentAttendanceStatus(studentId, date);
+    const { status: currentStatus, hasRecord } = getStudentAttendanceStatus(studentId, date);
 
-    if (newStatus === currentStatus) { showToast('⚠️ สถานะเหมือนเดิม ไม่มีการเปลี่ยนแปลง'); return; }
+    if (newStatus === currentStatus && hasRecord) { showToast('⚠️ สถานะเหมือนเดิม ไม่มีการเปลี่ยนแปลง'); return; }
     if (!reason) { showToast('❌ กรุณากรอกเหตุผล'); reasonInput.focus(); return; }
 
-    histStudentPendingEdit = { studentId, date, studentName: student.name, previousStatus: currentStatus, newStatus, reason };
+    histStudentPendingEdit = {
+        studentId, date, studentName: student.name,
+        // STEP 4: only send previousStatus when a record actually exists (UPDATE).
+        // For no-record rows (hasRecord=false) omit it so the server treats the
+        // request as a CREATE — never send a fake 'absent' just to satisfy the API.
+        previousStatus: hasRecord ? currentStatus : undefined,
+        newStatus, reason, hasRecord,
+    };
 
     const content = document.getElementById('histStuEditConfirmContent');
     if (content) {
@@ -889,7 +896,7 @@ function saveHistStudentDay(btn) {
             <div style="text-align:left;font-size:0.85rem;line-height:1.8;">
                 <div><span style="color:var(--text-muted)">นักศึกษา:</span> <strong>${escapeHtml(student.name)}</strong> <span style="color:var(--text-muted);font-family:var(--font-mono)">(${escapeHtml(student.id)})</span></div>
                 <div><span style="color:var(--text-muted)">วันที่:</span> <strong>${escapeHtml(date)}</strong> (สัปดาห์ ${histSelectedWeek})</div>
-                <div><span style="color:var(--text-muted)">สถานะเดิม:</span> <span class="badge ${kindBadgeClass(currentStatus)}">${escapeHtml(statusLabel(currentStatus))}</span></div>
+                <div><span style="color:var(--text-muted)">สถานะเดิม:</span> <span class="badge ${kindBadgeClass(currentStatus)}">${escapeHtml(histStatusLabel(currentStatus, hasRecord))}</span></div>
                 <div><span style="color:var(--text-muted)">สถานะใหม่:</span> <span class="badge ${kindBadgeClass(newStatus)}">${escapeHtml(statusLabel(newStatus))}</span></div>
                 <div><span style="color:var(--text-muted)">เหตุผล:</span> <strong>${escapeHtml(reason)}</strong> <span style="color:var(--text-muted);font-size:0.75rem;">(จำเป็น)</span></div>
             </div>`;
@@ -913,10 +920,13 @@ function confirmHistStuEditSave() {
 
     const scope = DateHelper.academicContext(ed.date);
     const payload = {
-        studentId: ed.studentId, date: ed.date, newStatus: ed.newStatus, previousStatus: ed.previousStatus,
+        studentId: ed.studentId, date: ed.date, newStatus: ed.newStatus,
         reason: ed.reason, method: 'แก้ไขย้อนหลัง (รายบุคคล)', admin: adminSessionUser || 'admin',
         academicYear: scope.academicYear, semester: scope.semester, week: scope.week, className: student.year || '',
     };
+    // Only send previousStatus for UPDATE (real record). Omitting it for CREATE
+    // tells the server this is a new record — no fake 'absent' is synthesised.
+    if (ed.previousStatus) payload.previousStatus = ed.previousStatus;
 
     showToast('⏳ กำลังบันทึกการแก้ไข...');
     apiAttendanceCorrection(payload)
@@ -925,10 +935,19 @@ function confirmHistStuEditSave() {
         })
         .then(function (res) {
             if (!res.status || res.status === 401) {
-                showToast('❌ ไม่ได้รับอนุญาติ — การแก้ไขล้มเหลว');
+                showToast('❌ กรุณาเข้าสู่ระบบใหม่');
+            } else if (res.status === 403) {
+                showToast('❌ คุณไม่มีสิทธิ์แก้ไขข้อมูล');
+            } else if (res.status === 404) {
+                showToast('❌ ไม่พบรายการเข้าแถวที่ต้องการแก้ไข');
             } else if (res.status === 409) {
                 var serverStatus = (res.body && res.body.previousStatus) || 'unknown';
-                showToast('⚠️ บันทึกไม่สำเร็จ: สถานะเปลี่ยนแล้ว (ปัจจุบัน: ' + statusLabel(serverStatus) + ') กรุณารีเฟรชและลองอีกครั้ง');
+                var serverHasRecord = res.body && res.body.hasRecord !== false;
+                showToast('⚠️ ' + ((res.body && res.body.error) || 'ข้อมูลถูกแก้ไขโดยผู้ใช้อื่น กรุณารีเฟรชข้อมูล') + ' (ปัจจุบัน: ' + histStatusLabel(serverStatus, serverHasRecord) + ')');
+            } else if (res.status === 422) {
+                showToast('❌ ข้อมูลไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง');
+            } else if (res.status === 429) {
+                showToast('❌ คำขอมากเกินไป กรุณารอและลองใหม่');
             } else if (res.status !== 200) {
                 showToast('❌ บันทึกไม่สำเร็จ: ' + ((res.body && res.body.error) || ('รหัส ' + res.status)));
             } else {
@@ -936,8 +955,9 @@ function confirmHistStuEditSave() {
                 auditLog('attendance_correction', 'attendance', ed.recordId || ed.studentId + '_' + ed.date, {
                     studentId: ed.studentId, studentName: ed.studentName, date: ed.date,
                     reason: ed.reason, admin: adminSessionUser || 'admin',
-                    before: { status: ed.previousStatus }, after: { status: ed.newStatus },
-                    previousStatus: ed.previousStatus, newStatus: ed.newStatus, serverConfirmed: true,
+                    before: { status: ed.previousStatus ? ed.previousStatus : 'ไม่มีข้อมูล' },
+                    after: { status: ed.newStatus },
+                    previousStatus: ed.previousStatus || null, newStatus: ed.newStatus, serverConfirmed: true,
                     recordId: (res.body && res.body.recordId) || ed.recordId || null,
                 });
                 showToast('✅ บันทึกการเปลี่ยนแปลงแล้ว');
@@ -945,7 +965,13 @@ function confirmHistStuEditSave() {
         })
         .catch(function (err) {
             console.error('[admin] student attendance correction failed:', err);
-            showToast('❌ ไม่สามารถบันทึกการแก้ไขได้ (เซิร์ฟเวอร์ตอบกลับผิดพลาด)');
+            // STEP 8: network failure / API unreachable. Distinguish from HTTP errors
+            // (which are handled per-status above) and never leak secrets/stack traces.
+            if (err && /not configured|not fetched|Failed to fetch|ECONNREFUSED/i.test(String(err && err.message))) {
+                showToast('❌ ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้ กรุณาตรวจสอบการเชื่อมต่อและลองใหม่');
+            } else {
+                showToast('❌ บันทึกไม่สำเร็จ เกิดข้อผิดพลาป่อนเศรฟเวอร์ กรุณาลองใหม่');
+            }
         })
         .finally(function () {
             histStudentPendingEdit = null;
@@ -2718,10 +2744,10 @@ let histPendingEdit = null;
 
 function getStudentAttendanceStatus(studentId, date) {
     const hasAtt = attendanceList.find(r => r.studentId === studentId && r.date === date);
-    if (hasAtt) return { status: DateHelper.isLate(hasAtt.time) ? 'late' : 'present', record: hasAtt };
+    if (hasAtt) return { status: DateHelper.isLate(hasAtt.time) ? 'late' : 'present', record: hasAtt, hasRecord: true };
     const hasLeave = leaveList.find(r => r.studentId === studentId && r.date === date && r.status === 'approved');
-    if (hasLeave) return { status: hasLeave.type === 'holiday' ? 'holiday' : 'leave', record: hasLeave };
-    return { status: 'absent', record: null };
+    if (hasLeave) return { status: hasLeave.type === 'holiday' ? 'holiday' : 'leave', record: hasLeave, hasRecord: true };
+    return { status: 'absent', record: null, hasRecord: false };
 }
 
 function openAdminHistorical() {
@@ -2875,7 +2901,7 @@ function loadHistoricalAttendance() {
     const kindBadge = {
         present: ['badge-green','✓ ตรงเวลา'],
         late:    ['badge-yellow','⏰ มาสาย'],
-        absent:  ['badge-red','✕ ขาด'],
+        absent:  ['badge-red','✕ ไม่มีข้อมูล'],
         leave:   ['badge-blue','📝 ลา'],
         holiday: ['badge-purple','🎌 วันหยุด']
     };
@@ -2937,9 +2963,9 @@ function saveHistStudent(btn) {
     const newStatus = statusSelect.value;
     const reason = reasonTextarea.value.trim();
 
-    const { status: currentStatus } = getStudentAttendanceStatus(studentId, date);
+    const { status: currentStatus, hasRecord } = getStudentAttendanceStatus(studentId, date);
 
-    if (newStatus === currentStatus) {
+    if (newStatus === currentStatus && hasRecord) {
         showToast('⚠️ สถานะเหมือนเดิม ไม่มีการเปลี่ยนแปลง');
         return;
     }
@@ -2954,7 +2980,8 @@ function saveHistStudent(btn) {
         studentId,
         date,
         studentName: student.name,
-        previousStatus: currentStatus,
+        previousStatus: hasRecord ? currentStatus : undefined,
+        hasRecord,
         newStatus,
         reason
     };
@@ -2965,7 +2992,7 @@ function saveHistStudent(btn) {
             <div style="text-align:left;font-size:0.85rem;line-height:1.8;">
                 <div><span style="color:var(--text-muted)">นักศึกษา:</span> <strong>${escapeHtml(student.name)}</strong> <span style="color:var(--text-muted);font-family:var(--font-mono)">(${escapeHtml(student.id)})</span></div>
                 <div><span style="color:var(--text-muted)">วันที่:</span> <strong>${escapeHtml(date)}</strong></div>
-                <div><span style="color:var(--text-muted)">สถานะเดิม:</span> <span class="badge ${kindBadgeClass(currentStatus)}">${escapeHtml(statusLabel(currentStatus))}</span></div>
+                <div><span style="color:var(--text-muted)">สถานะเดิม:</span> <span class="badge ${kindBadgeClass(currentStatus)}">${escapeHtml(histStatusLabel(currentStatus, hasRecord))}</span></div>
                  <div><span style="color:var(--text-muted)">สถานะใหม่:</span> <span class="badge ${kindBadgeClass(newStatus)}">${escapeHtml(statusLabel(newStatus))}</span></div>
                  <div><span style="color:var(--text-muted)">เหตุผล:</span> <strong>${escapeHtml(reason)}</strong> <span style="color:var(--text-muted);font-size:0.75rem;">(จำเป็น)</span></div>
             </div>
@@ -2977,6 +3004,12 @@ function saveHistStudent(btn) {
 function statusLabel(s) {
     const labels = { present: 'ตรงเวลา', late: 'มาสาย', absent: 'ขาด', leave: 'ลา', holiday: 'วันหยุด' };
     return labels[s] || s;
+}
+// Historical-specific label: "ไม่มีข้อมูล" (NO RECORD) must NOT be shown as "ขาด"
+// (EXPLICIT ABSENT). When hasRecord is false the row has no attendance/leave record.
+function histStatusLabel(s, hasRecord) {
+    if (s === 'absent' && !hasRecord) return 'ไม่มีข้อมูล';
+    return statusLabel(s);
 }
 function kindBadgeClass(s) {
     const cls = { present: 'badge-green', late: 'badge-yellow', absent: 'badge-red', leave: 'badge-blue', holiday: 'badge-purple' };
@@ -3356,14 +3389,31 @@ function apiSyncAttendance(data) {
 function syncScanAttendance(record) {
     if (!record || !record.studentId || !record.date) return;
     const newStatus = (record.time && record.time > '08:00') ? 'late' : 'present';
+    // STEP 4: real-time face recognition writes to the SAME attendance source as
+    // manual entry (the server correction endpoint). A system reason is always
+    // supplied so the server accepts the request and the audit trail is complete.
     apiSyncAttendance({
         studentId: record.studentId,
         date: record.date,
         newStatus: newStatus,
+        reason: 'ลงชื่อผ่านการจดจำใบหน้า (ระบบ)',
         method: 'FACE_RECOGNITION',
         admin: currentAdmin(),
         className: record.year || '',
         week: record.weekNum || undefined,
+    }).then(function (res) {
+        if (res && res.status === 200 && res.body && res.body.ok && res.body.attendanceId) {
+            // Server assigned a canonical id — link it to the local attendance record
+            // so evidence uploads reference the server-side attendance event.
+            var i = attendanceList.findIndex(r => r.studentId === record.studentId && r.date === record.date);
+            if (i !== -1 && !attendanceList[i].attendanceId) attendanceList[i].attendanceId = res.body.attendanceId;
+        }
+    }).catch(function (e) { console.warn('[attendance-sync] failed (kept locally only):', e); });
+}
+            }
+        } else if (res && res.status === 409) {
+            console.warn('[attendance-sync] server side-effect conflict for', record.studentId, record.date);
+        }
     }).catch(function (e) { console.warn('[attendance-sync] failed (kept locally only):', e); });
 }
 
@@ -3766,7 +3816,6 @@ function confirmHistEditSave() {
         studentId: ed.studentId,
         date: ed.date,
         newStatus: ed.newStatus,
-        previousStatus: ed.previousStatus,
         reason: ed.reason,
         method: 'แก้ไขย้อนหลัง (AI)',   // reuse existing method convention (manual admin edit)
         admin: adminSessionUser || 'admin',
@@ -3775,6 +3824,9 @@ function confirmHistEditSave() {
         week: scope.week,
         className: student.year || '',
     };
+    // Only send previousStatus for UPDATE (real record). Omitting it for CREATE
+    // tells the server this is a new record — no fake 'absent' is synthesised.
+    if (ed.previousStatus) payload.previousStatus = ed.previousStatus;
 
     showToast('⏳ กำลังบันทึกการแก้ไข...');
     apiAttendanceCorrection(payload)
@@ -3785,11 +3837,19 @@ function confirmHistEditSave() {
         })
         .then(function (res) {
             if (!res.status || res.status === 401) {
-                showToast('❌ ไม่ได้รับอนุญาติ — การแก้ไขล้มเหลว');
+                showToast('❌ กรุณาเข้าสู่ระบบใหม่');
+            } else if (res.status === 403) {
+                showToast('❌ คุณไม่มีสิทธิ์แก้ไขข้อมูล');
+            } else if (res.status === 404) {
+                showToast('❌ ไม่พบรายการเข้าแถวที่ต้องการแก้ไข');
             } else if (res.status === 409) {
-                // STEP 9: optimistic concurrency conflict — the record was modified by another admin.
                 var serverStatus = (res.body && res.body.previousStatus) || 'unknown';
-                showToast('⚠️ บันทึกไม่สำเร็จ: สถานะเปลี่ยนแล้ว (ปัจจุบัน: ' + statusLabel(serverStatus) + ') กรุณารีเฟรชและลองอีกครั้ง');
+                var serverHasRecord = res.body && res.body.hasRecord !== false;
+                showToast('⚠️ ' + ((res.body && res.body.error) || 'ข้อมูลถูกแก้ไขโดยผู้ใช้อื่น กรุณารีเฟรชข้อมูล') + ' (ปัจจุบัน: ' + histStatusLabel(serverStatus, serverHasRecord) + ') กรุณากดรีเฟรชและลองอีกครั้ง');
+            } else if (res.status === 422) {
+                showToast('❌ ข้อมูลไม่ถูกต้อง กรุณาตรวจสอบอีกครั้ง');
+            } else if (res.status === 429) {
+                showToast('❌ คำขอมากเกินไป กรุณารอและลองใหม่');
             } else if (res.status !== 200) {
                 showToast('❌ บันทึกไม่สำเร็จ: ' + ((res.body && res.body.error) || ('รหัส ' + res.status)));
             } else {
@@ -3799,8 +3859,9 @@ function confirmHistEditSave() {
                 auditLog('attendance_correction', 'attendance', ed.recordId || ed.studentId + '_' + ed.date, {
                     studentId: ed.studentId, studentName: ed.studentName, date: ed.date,
                     reason: ed.reason, admin: adminSessionUser || 'admin',
-                    before: { status: ed.previousStatus }, after: { status: ed.newStatus },
-                    previousStatus: ed.previousStatus, newStatus: ed.newStatus, serverConfirmed: true,
+                    before: { status: ed.previousStatus ? ed.previousStatus : 'ไม่มีข้อมูล' },
+                    after: { status: ed.newStatus },
+                    previousStatus: ed.previousStatus || null, newStatus: ed.newStatus, serverConfirmed: true,
                     recordId: (res.body && res.body.recordId) || ed.recordId || null,
                 });
                 showToast('✅ บันทึกการเปลี่ยนแปลงแล้ว');
@@ -3808,7 +3869,12 @@ function confirmHistEditSave() {
         })
         .catch(function (err) {
             console.error('[admin] attendance correction failed:', err);
-            showToast('❌ ไม่สามารถบันทึกการแก้ไขได้ (เซิร์ฟเวอร์ตอบกลับผิดพลาด)');
+            // STEP 8: network failure / API unreachable — safe, specific message.
+            if (err && /not configured|not fetched|Failed to fetch|ECONNREFUSED/i.test(String(err && err.message))) {
+                showToast('❌ ไม่สามารถเชื่อมต่อกับเซิร์ฟเวอร์ได้ กรุณาตรวจสอบการเชื่อมต่อและลองใหม่');
+            } else {
+                showToast('❌ บันทึกไม่สำเร็จ เกิดข้อผิดพลาป่อนเศรฟเวอร์ กรุณาลองใหม่');
+            }
         })
         .finally(function () {
             histPendingEdit = null;

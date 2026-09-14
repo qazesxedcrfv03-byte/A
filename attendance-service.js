@@ -30,7 +30,7 @@
  */
 const http = require('http');
 const crypto = require('crypto');
-const { loadTable, saveTable } = require('./supabase-store');
+const { loadTable, saveTable, upsertRows } = require('./supabase-store');
 
 // Table names in Supabase (see supabase-schema.sql).
 const TBL = {
@@ -71,6 +71,11 @@ function securityHeaders(req) {
 }
 
 function generateId() { return 'att_' + Date.now() + '_' + Math.random().toString(36).slice(2, 10); }
+// Audit `id` is a server-allocated bigint primary key (see supabase-schema.sql).
+// Seeded from Date.now() so it is always above any auto-generated legacy ids
+// and monotonically unique within a process lifetime.
+let _auditSeq = Date.now();
+function nextAuditId() { return ++_auditSeq; }
 
 // ── Auth / CORS / helpers (mirror storage-service.js) ──
 function isAuthorized(req) {
@@ -132,6 +137,15 @@ let SCAN_LOGS = [];        // scan history: [{ scanId, studentId, studentName, c
 function validDate(s) { return typeof s === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(s); }
 function validStudentId(s) { return typeof s === 'string' && s.trim().length > 0; }
 function validMethod(m) { return typeof m === 'string' && METHOD_RE.test(m); }
+function validAcademicYear(y) { return typeof y === 'string' && /^\d{4}$/.test(y); }
+function validSemester(s) {
+    const n = Number(s);
+    return (n === 1 || n === 2);
+}
+// ปวช. = 18 weeks, ปวส. = 15 weeks (mirrors app.js maxWeeksForLevel).
+function maxWeekForClass(className) {
+    return String(className || '').indexOf('ปวส') !== -1 ? 15 : 18;
+}
 
 // ── Correction/upsert business rules (server-side; client cannot bypass) ──
 function computePreviousStatus(studentId, date) {
@@ -167,6 +181,7 @@ async function runCorrection(payload) {
         return { ok: false, conflict: true, action: 'conflict',
             error: 'previousStatus does not match current record',
             previousStatus: serverPreviousStatus,
+            hasRecord: prev.record != null,
             newStatus: payload.newStatus };
     }
 
@@ -241,6 +256,7 @@ async function runCorrection(payload) {
     // status, reason, and timestamp. Does NOT store biometric data or secrets.
     const recordId = (attendance && attendance.id) || (leave && leave.id) || null;
     const audit = {
+        id: nextAuditId(),
         action: 'attendance_correction',
         recordId: recordId,
         studentId, date,
@@ -253,10 +269,11 @@ async function runCorrection(payload) {
         week: scope.week, className: scope.className,
     };
     AUDIT.push(audit);
-    // audit is best-effort persisted; never blocks the correction.
-    try { await saveTable(TBL.AUDIT, AUDIT); } catch (e) { /* ignore audit persistence errors */ }
+    // Audit is append-only: upsert the single new row by id (no delete-all) so a
+    // crash can never wipe the trail. Best-effort — never blocks the correction.
+    try { await upsertRows(TBL.AUDIT, audit); } catch (e) { console.error('[supabase] audit persist failed:', e.message); }
 
-    return { ok: true, action, previousStatus, newStatus, method: method || null, recordId: (attendance && attendance.id) || (leave && leave.id) || null, attendance, leave };
+    return { ok: true, action, previousStatus, newStatus, method: method || null, hasRecord: prev.record != null, recordId: (attendance && attendance.id) || (leave && leave.id) || null, attendance, leave };
 }
 
 // week-of-academic-year by date (mirrors DateHelper.getAcademicWeekNum, ISO weeks from May 1)
@@ -349,11 +366,40 @@ function handleCorrection(req, res) {
         const method = body.method;
         if (!validStudentId(studentId)) return jsonRes(res, req, 400, { error: 'invalid studentId' });
         if (!validDate(date)) return jsonRes(res, req, 400, { error: 'invalid date' });
-        if (!previousStatus || !STATUS.has(previousStatus)) return jsonRes(res, req, 400, { error: 'invalid or missing previousStatus (must be one of: present, late, absent, leave, holiday)' });
+        // previousStatus is OPTIONAL: when omitted the server treats the request as a
+        // CREATE (no record exists on the client). When provided it must be a valid
+        // status and is checked against the server's current view for concurrency.
+        // (STEP 1/4: do NOT accept a fake previousStatus just to satisfy the API.)
+        if (previousStatus != null) {
+            if (typeof previousStatus !== 'string' || !STATUS.has(previousStatus)) {
+                return jsonRes(res, req, 400, { error: 'invalid previousStatus (must be one of: present, late, absent, leave, holiday)' });
+            }
+        }
         if (!STATUS.has(newStatus)) return jsonRes(res, req, 400, { error: 'invalid newStatus' });
-        if (!(reason && String(reason).trim())) return jsonRes(res, req, 400, { error: 'reason required' });
         if (method != null && !validMethod(method)) return jsonRes(res, req, 400, { error: 'invalid method' });
-        const result = await runCorrection({ studentId, date, previousStatus, newStatus, reason: String(reason), method, admin: body.admin,
+        // Face-recognition scans are automated system events with no human-provided
+        // reason — they must share the SAME attendance source as manual entry (STEP 2/4).
+        // Auto-fill a system reason for the audit trail; only require an explicit
+        // reason for manual/admin edits.
+        var isFaceScan = method != null && (method === 'FACE_RECOGNITION' || /^ใบหน้า/.test(String(method)));
+        var effectiveReason = (typeof reason === 'string') ? reason.trim() : '';
+        if (!effectiveReason && isFaceScan) effectiveReason = 'ลงชื่อผ่านการจดจำใบหน้า (ระบบ)';
+        if (!effectiveReason && !isFaceScan) return jsonRes(res, req, 400, { error: 'reason required for manual corrections' });
+        // STEP 7: validate academic scope fields when supplied.
+        if (body.academicYear != null && !validAcademicYear(body.academicYear)) {
+            return jsonRes(res, req, 400, { error: 'invalid academicYear' });
+        }
+        if (body.semester != null && !validSemester(body.semester)) {
+            return jsonRes(res, req, 400, { error: 'invalid semester (must be 1 or 2)' });
+        }
+        if (body.week != null) {
+            const wk = Number(body.week);
+            const maxWk = maxWeekForClass(body.className);
+            if (!Number.isFinite(wk) || wk < 1 || wk > maxWk) {
+                return jsonRes(res, req, 400, { error: 'invalid week (' + (Number.isFinite(wk) ? wk : 'NaN') + ') for class ' + (body.className || 'unknown') + ' (max ' + maxWk + ')' });
+            }
+        }
+        const result = await runCorrection({ studentId, date, previousStatus, newStatus, reason: effectiveReason, method, admin: body.admin,
             academicYear: body.academicYear, semester: body.semester, week: body.week, className: body.className });
         if (!result.ok) {
             // 409 Conflict: the client's previousStatus does not match the server's view
